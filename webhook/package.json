@@ -1,0 +1,15 @@
+{
+  "name": "whatsapp-webhook",
+  "version": "1.0.0",
+  "description": "WhatsApp Business API webhook handler",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "axios": "^1.18.0",
+    "better-sqlite3": "^12.11.1",
+    "dotenv": "^17.4.2",
+    "express": "^4.21.0"
+  }
+}
