@@ -68,6 +68,90 @@ Group/channel routing is configured via env (JSON) or a `routing.json` file next
 }
 ```
 
+## Deployment Topologies
+
+Every inter-component URL is an environment variable, so the stack can be
+deployed in two layouts.
+
+### 1. Consolidated topology (single VPS / dedicated server — recommended)
+
+**Requirement: a VPS or dedicated server you fully control.**
+This stack needs long-running daemons (webhook server, processor,
+router, poller), systemd services, and optionally a local llama.cpp
+server for zero-cost LLM replies. Shared hosting CANNOT run it.
+
+```
+WhatsApp/Meta Cloud ──HTTPS──▶ [VPS]
+   nginx/Caddy (TLS, :443)
+        └─▶ webhook server.js   127.0.0.1:3001   (Meta verify + ingest)
+              └─▶ processor.js                   (AI reply pipeline)
+                    └─▶ LLM: MiMo / DeepSeek / local llama.cpp
+
+   Optional task flow (zero-LLM routing):
+   whatsapp_webhook.py :3003 ──▶ router.py :3002 ──▶ worker queue
+   whatsapp_poller.py ──▶ Baileys bridge :3000 (unofficial API)
+```
+
+Env (single box — everything points at 127.0.0.1):
+```
+# webhook/
+VERIFY_TOKEN=*** rand -hex 32)
+WHATSAPP_TOKEN=*** Cloud API token>
+WHATSAPP_PHONE_ID=<id>
+XIAOMI_API_KEY=*** DEEPSEEK_API_KEY=*** LOCAL_MODEL_URL=http://127.0.0.1:8081/v1/chat/completions
+
+# router/
+ROUTER_PORT=3002  WEBHOOK_PORT=3003
+POWER_TOOL_API=http://127.0.0.1:5557/api/dispatch
+WHATSAPP_BRIDGE=http://127.0.0.1:3000
+WHATSAPP_GROUPS_JSON={"<group-id>@g.us":{"client":"acme","profile":"acme"}}
+```
+
+Expose ONLY 80/443 through a reverse proxy with TLS (Meta requires HTTPS
+for webhooks anyway). All internal services stay on 127.0.0.1.
+
+### 2. Split topology (public edge separate from the brain)
+
+Use when the WhatsApp-facing edge (webhook endpoint that Meta must reach)
+lives on a different machine from your agent/worker infrastructure.
+
+```
+WhatsApp/Meta ──HTTPS──▶ [EDGE SERVER: public, DMZ]
+                          webhook server.js (ingest + verify only)
+                                │ forwards (outbound HTTPS, HMAC)
+                                ▼
+                          [BRAIN SERVER: private, no public ports]
+                          processor.js / router.py / agent workers
+                          (local LLM optional here)
+```
+
+Rules that make split mode safe:
+- Edge holds only: `VERIFY_TOKEN`, `WHATSAPP_TOKEN`, forwarding URL/secret
+- Brain holds everything else (LLM keys, worker APIs, routing maps)
+- Edge → brain traffic is outbound from the edge (firewall-friendly);
+  the brain never opens inbound ports
+- If the edge is compromised, blast radius = WhatsApp tokens only —
+  rotate them; the brain's keys never existed on the edge
+
+For the Baileys-based flow (unofficial API), the bridge must run where
+the phone is reachable — typically the brain server, with the poller
+pulling from it over the private network.
+
+### Choosing
+
+| | Consolidated | Split |
+|---|---|---|
+| Server requirement | 1 VPS/dedicated (full control) | 2 boxes: public edge + private brain |
+| Shared hosting possible? | No | No (edge still needs daemons) |
+| Latency | lowest | +1 network hop |
+| Blast radius if edge breached | whole box | WhatsApp tokens only |
+| Local LLM placement | same box | brain box |
+| Complexity | low | medium (2 secret domains) |
+
+> Note: unlike the WP-based front-ends, this stack cannot use shared
+> hosting for its edge because Meta's webhook needs a persistent Node
+> process — a shared PHP host cannot run `server.js`.
+
 ## Security
 
 - **Fail-closed webhook verification** — server refuses to start without `VERIFY_TOKEN`; comparison is constant-time (`crypto.timingSafeEqual`)
