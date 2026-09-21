@@ -80,8 +80,9 @@ is identical for both providers — only the transport layer changes.
 ```bash
 cd webhook
 npm install
-cp .env.example .env    # fill in your WhatsApp Cloud API credentials
-node server.js          # webhook server
+cp .env.example .env    # set WA_PROVIDER=meta (Cloud API creds) or
+                        # WA_PROVIDER=baileys (BAILEYS_BRIDGE URL)
+node server.js          # webhook server (also accepts /api/inbound for Baileys)
 node processor.js       # AI reply pipeline
 ```
 
