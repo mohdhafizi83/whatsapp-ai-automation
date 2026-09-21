@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-WhatsApp Poller - Tanpa LLM
+WhatsApp Poller - Zero-LLM
 ============================
 Poll the WhatsApp bridge for new messages and dispatch them to the Power Tool API.
-Replaces the Hermes gateway for task receiving.
+Replaces a gateway layer for task receiving.
 """
 
 import json

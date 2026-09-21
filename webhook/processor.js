@@ -669,7 +669,7 @@ function extractAndStoreBooking(reply, waId, convId) {
   }
 }
 
-// ===== TASK CLIENT — Delegate to Hermes Profile =====
+// ===== TASK CLIENT — Delegate to worker/agent queue =====
 // Tracks async tasks and polls for completion in mainLoop
 if (!global.trackedTasks) {
   global.trackedTasks = new Map();
@@ -1344,8 +1344,8 @@ async function processInContext(msg, context, convId) {
       reply = await callMiMo(fbMessages);
     }
   } else if (context === 'task-client') {
-    // === TASK CLIENT CONTEXT: Delegate to Hermes profile ===
-    console.log('[TASK-CLIENT] Delegating to Hermes profile client');
+    // === TASK CLIENT CONTEXT: Delegate to worker/agent queue ===
+    console.log("[TASK-CLIENT] Delegating to worker/agent queue");
     reply = await executeTaskClient(msg, convId);
   } else if (context === 'image-analysis') {
     // === IMAGE ANALYSIS CONTEXT: Auto-analyze ===

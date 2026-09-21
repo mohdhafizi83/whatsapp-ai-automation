@@ -3,7 +3,7 @@
 WhatsApp Webhook Receiver
 =========================
 Receive WhatsApp messages and forward them to the Task Router.
-Tanpa LLM - pure routing.
+Zero-LLM - pure routing.
 """
 
 import json
