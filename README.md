@@ -24,7 +24,44 @@ A self-hosted WhatsApp automation stack: webhook ingestion, an AI reply processo
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Flow:** WhatsApp message → webhook/processor (AI reply) or router (task dispatch to a worker queue) → response back via WhatsApp Cloud API.
+**Flow:** WhatsApp message → webhook/processor (AI reply) or router (task dispatch to a worker queue) → response back via your configured provider (Meta Cloud API or Baileys bridge).
+
+## WhatsApp Provider: Official vs Unofficial
+
+Set `WA_PROVIDER` to choose how the stack connects to WhatsApp:
+
+| | `meta` (official) | `baileys` (unofficial) |
+|---|---|---|
+| Connection | WhatsApp Business Cloud API (graph.facebook.com) | Local bridge + QR pairing with your phone |
+| Cost | Per-conversation pricing (Meta) | Free |
+| Number type | Business number (Meta-verified) | Any personal number |
+| Interactive lists / buttons | ✅ Native | ⚠️ Rendered as numbered text menu |
+| Webhook push | ✅ Meta pushes to `/webhook` | ❌ Bridge must POST to `/api/inbound` |
+| Media download | Via Meta media API | Bridge downloads locally, paths passed through |
+| Ban risk | Low (official) | Present — unofficial protocol, use at your own risk |
+| Approval | Business verification required | None |
+
+### Meta Cloud API (default)
+
+1. Create a WhatsApp Business app at developers.facebook.com
+2. Set `WA_PROVIDER=meta`, `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`
+3. Point Meta's webhook at your `GET/POST /webhook` (verify token = `VERIFY_TOKEN`)
+4. Everything works natively: text, media, interactive lists, read receipts
+
+### Baileys (unofficial bridge)
+
+1. Run any Baileys-based bridge that exposes:
+   - `POST /send {chatId, message}` → `{messageId}`
+   - an event stream/queue of inbound events
+2. Set `WA_PROVIDER=baileys` and `BAILEYS_BRIDGE=http://127.0.0.1:3000`
+3. Wire the bridge to push inbound events into this stack:
+   `POST http://<webhook-server>:3001/api/inbound` with the bridge event JSON
+   (`messageId, chatId, senderId, senderName, body, hasMedia, mediaType, mime, fileName, mediaUrls[]`)
+4. Outbound replies go through the bridge automatically; interactive lists
+   degrade gracefully to numbered text menus
+
+The rest of the pipeline (processor, LLM backends, limits, router, myinfo)
+is identical for both providers — only the transport layer changes.
 
 ## Features
 

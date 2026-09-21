@@ -37,6 +37,11 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '';
 const WHATSAPP_API = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_ID}/messages`;
 
+// WhatsApp provider: 'meta' (official Cloud API, default) or 'baileys' (unofficial bridge)
+const WA_PROVIDER = (process.env.WA_PROVIDER || 'meta').toLowerCase();
+// Baileys bridge base URL (used when WA_PROVIDER=baileys)
+const BAILEYS_BRIDGE = process.env.BAILEYS_BRIDGE || 'http://127.0.0.1:3000';
+
 // Xiaomi/MiMo API (OpenAI-compatible)
 const XIAOMI_API_KEY = process.env.XIAOMI_API_KEY || '';
 const XIAOMI_BASE_URL = process.env.XIAOMI_BASE_URL || 'https://api.xiaomimimo.com/v1';
@@ -992,6 +997,23 @@ async function executeDocumentAnalysis(msg, convId) {
 
 // ===== SEND VIA WHATSAPP =====
 async function sendWhatsApp(waId, text) {
+  // ── Baileys (unofficial bridge) ──
+  if (WA_PROVIDER === 'baileys') {
+    try {
+      const response = await axios.post(`${BAILEYS_BRIDGE}/send`, {
+        chatId: waId,
+        message: text
+      }, { timeout: 15000 });
+      return response.data?.messageId || null;
+    } catch (err) {
+      const status = err.response?.status || 'network';
+      const detail = err.response?.data?.error || err.message;
+      console.error(`[WA SEND ERROR] Baileys status ${status}: ${detail}`);
+      return null;
+    }
+  }
+
+  // ── Meta Cloud API (official) ──
   if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
     console.warn('[WA SKIP] No WhatsApp API credentials configured');
     return null;
@@ -1021,6 +1043,17 @@ async function sendWhatsApp(waId, text) {
 
 // ===== SEND INTERACTIVE LIST (WhatsApp List Message) =====
 async function sendInteractiveList(waId, bodyText, buttonLabel, sectionTitle, rows) {
+  // Baileys bridge has no native interactive-list support — render a
+  // numbered text menu instead (reply by number is handled as normal text).
+  if (WA_PROVIDER === 'baileys') {
+    const lines = (rows || []).map((r, i) => {
+      const desc = r.description ? ` — ${r.description}` : '';
+      return `${i + 1}. ${r.title}${desc}`;
+    });
+    const menu = `${bodyText}\n\n${sectionTitle ? `*${sectionTitle}*\n` : ''}${lines.join('\n')}\n\nReply with a number.`;
+    return sendWhatsApp(waId, menu);
+  }
+
   if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
     console.warn('[WA SKIP] No WhatsApp API credentials for list message');
     return null;

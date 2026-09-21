@@ -21,6 +21,11 @@ const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || '';
 const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_ID || '';
 const WHATSAPP_API = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_ID}/messages`;
 
+// Provider: 'meta' (official Cloud API, default) or 'baileys' (unofficial bridge)
+const WA_PROVIDER = (process.env.WA_PROVIDER || 'meta').toLowerCase();
+// Baileys bridge URL (used when WA_PROVIDER=baileys)
+const BAILEYS_BRIDGE = process.env.BAILEYS_BRIDGE || 'http://127.0.0.1:3000';
+
 // Media download directory
 const MEDIA_DIR = path.join(__dirname, 'media');
 if (!fs.existsSync(MEDIA_DIR)) {
@@ -458,6 +463,49 @@ app.post('/webhook', (req, res) => {
 });
 
 // ===== API ENDPOINTS for processor =====
+
+// ── Baileys inbound injection ──────────────────────────────
+// Baileys (unofficial) has no push webhook — the bridge POSTs events here.
+// Accepts the bridge's event shape and normalizes it into the same
+// storage pipeline used by Meta Cloud API webhooks.
+// Expected: { messageId, chatId, senderId, senderName, isGroup, body,
+//             hasMedia, mediaType, mime, fileName, mediaUrls: [...] }
+app.post('/api/inbound', express.json({ limit: '1mb' }), (req, res) => {
+  const ev = req.body || {};
+  if (!ev.chatId || (ev.body == null && !ev.hasMedia)) {
+    return res.status(400).json({ error: 'chatId and body (or media) required' });
+  }
+
+  // Normalize Baileys event → Meta-style message object
+  const type = ev.hasMedia ? (ev.mediaType || 'image') : 'text';
+  const msg = { id: ev.messageId || `baileys-${Date.now()}`, type };
+  if (type === 'text') {
+    msg.text = { body: String(ev.body || '') };
+  } else {
+    const mediaObj = {
+      id: (ev.mediaUrls && ev.mediaUrls[0]) || null,  // local path from bridge
+      mime_type: ev.mime || 'application/octet-stream',
+    };
+    if (ev.body) mediaObj.caption = String(ev.body);
+    if (type === 'document' && ev.fileName) mediaObj.filename = ev.fileName;
+    msg[type] = mediaObj;
+  }
+  if (ev.quotedMessageId) msg.context = { id: ev.quotedMessageId };
+
+  const result = storeIncomingMessage(ev.chatId, ev.senderName || null, msg);
+  if (result) {
+    // Baileys media is already downloaded locally by the bridge — point
+    // media_url straight at the local path (no Meta media download needed).
+    if (ev.hasMedia && ev.mediaUrls && ev.mediaUrls[0]) {
+      db.prepare('UPDATE messages SET media_url = ? WHERE id = ?')
+        .run(ev.mediaUrls[0], result.messageId);
+    }
+    console.log(`[BAILEYS] Stored msg #${result.messageId} from ${ev.chatId}`);
+    res.json({ status: 'ok', message_id: result.messageId, conversation_id: result.conversationId });
+  } else {
+    res.status(200).json({ status: 'skipped', reason: 'limit or duplicate' });
+  }
+});
 
 // Get unprocessed incoming messages
 app.get('/api/messages/pending', (req, res) => {
