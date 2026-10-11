@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
@@ -12,7 +13,7 @@ if (!VERIFY_TOKEN) {
   console.error('FATAL: VERIFY_TOKEN env var is required (fail-closed). See .env.example');
   process.exit(1);
 }
-const DB_PATH = path.join(__dirname, 'whatsapp.db');
+const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'whatsapp.db');
 const MAX_PHONE_NUMBERS = 40;
 const MAX_CONVERSATIONS_PER_DAY = 25;
 
@@ -37,6 +38,9 @@ if (!fs.existsSync(MEDIA_DIR)) {
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
 db.pragma('foreign_keys = ON');
+
+// Apply schema (idempotent — all statements are CREATE ... IF NOT EXISTS)
+db.exec(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
 
 // Prepared statements (compile sekali, guna banyak kali)
 const stmts = {
@@ -368,10 +372,70 @@ async function downloadMedia(mediaId, waId, messageId, mimeType) {
   }
 }
 
+// ===== SECURITY MIDDLEWARE =====
+// APP_SECRET: Meta App Secret (App Dashboard → Settings → Basic) used to
+// verify X-Hub-Signature-256 on POST /webhook. Fail-closed: without it the
+// webhook endpoint returns 503 rather than accepting unverified payloads.
+const APP_SECRET = process.env.APP_SECRET || '';
+// API_KEY: shared secret required in X-API-Key header for all /api/* routes.
+// Fail-closed: without it every /api/* route returns 503. /health stays open.
+const API_KEY = process.env.API_KEY || '';
+
+function timingSafeCompare(a, b) {
+  const bufA = Buffer.from(String(a));
+  const bufB = Buffer.from(String(b));
+  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+}
+
+// Security headers on every response (hand-rolled — no helmet dependency)
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  if (req.path.startsWith('/api') || req.path.startsWith('/webhook')) {
+    res.setHeader('Cache-Control', 'no-store');
+  }
+  next();
+});
+
 // ===== MIDDLEWARE =====
+// 1mb body limit applies to ALL routes incl. POST /webhook (DoS hygiene)
 app.use(express.json({
-  verify: (req, res, buf) => { req.rawBody = buf.toString(); }
+  limit: '1mb',
+  verify: (req, res, buf) => { req.rawBody = buf; }
 }));
+
+// Mandatory X-Hub-Signature-256 verification for Meta webhook POSTs
+function verifyWebhookSignature(req, res, next) {
+  if (!APP_SECRET) {
+    return res.status(503).json({ error: 'Webhook signature verification unavailable: APP_SECRET not configured' });
+  }
+  const header = req.headers['x-hub-signature-256'];
+  if (typeof header !== 'string' || !header.startsWith('sha256=')) {
+    return res.status(401).json({ error: 'Missing or malformed X-Hub-Signature-256' });
+  }
+  const expected = 'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(req.rawBody || Buffer.alloc(0)).digest('hex');
+  if (!timingSafeCompare(header, expected)) {
+    console.warn('[WEBHOOK] ❌ signature mismatch from', req.ip);
+    return res.status(401).json({ error: 'Invalid signature' });
+  }
+  next();
+}
+
+// API-key auth for all /api/* routes (fail-closed when API_KEY unset)
+function requireApiKey(req, res, next) {
+  if (!API_KEY) {
+    return res.status(503).json({ error: 'API authentication unavailable: API_KEY not configured' });
+  }
+  const provided = req.headers['x-api-key'];
+  if (typeof provided !== 'string' || !timingSafeCompare(provided, API_KEY)) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+app.use('/api', requireApiKey);
 
 // ===== VERIFICATION (GET) =====
 app.get('/webhook', (req, res) => {
@@ -381,7 +445,6 @@ app.get('/webhook', (req, res) => {
 
   console.log(`[VERIFY] mode=${mode}, challenge=${challenge ? 'present' : 'missing'}`);
 
-  const crypto = require('crypto');
   const tokenBuf = Buffer.from(String(token || ''));
   const verifyBuf = Buffer.from(VERIFY_TOKEN);
   const tokenOk = tokenBuf.length === verifyBuf.length &&
@@ -396,7 +459,7 @@ app.get('/webhook', (req, res) => {
 });
 
 // ===== INCOMING EVENTS (POST) =====
-app.post('/webhook', (req, res) => {
+app.post('/webhook', verifyWebhookSignature, (req, res) => {
   const body = req.body;
 
   if (body.object === 'whatsapp_business_account' && body.entry) {
@@ -470,7 +533,7 @@ app.post('/webhook', (req, res) => {
 // storage pipeline used by Meta Cloud API webhooks.
 // Expected: { messageId, chatId, senderId, senderName, isGroup, body,
 //             hasMedia, mediaType, mime, fileName, mediaUrls: [...] }
-app.post('/api/inbound', express.json({ limit: '1mb' }), (req, res) => {
+app.post('/api/inbound', (req, res) => {
   const ev = req.body || {};
   if (!ev.chatId || (ev.body == null && !ev.hasMedia)) {
     return res.status(400).json({ error: 'chatId and body (or media) required' });
@@ -591,12 +654,32 @@ app.get('/health', (req, res) => {
   });
 });
 
-// ===== START =====
-app.listen(PORT, '127.0.0.1', () => {
-  console.log(`✅ WhatsApp Webhook v2 (with DB)`);
-  console.log(`   Port: ${PORT}`);
-  console.log(`   DB: ${DB_PATH}`);
-  console.log(`   Verify token: ${VERIFY_TOKEN}`);
-  console.log(`   Max phones: ${MAX_PHONE_NUMBERS}`);
-  console.log(`   Max convos/day/phone: ${MAX_CONVERSATIONS_PER_DAY}`);
+// ===== ERROR HANDLING =====
+// Central error middleware: never leak stack traces or exception text.
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.parse.failed' || err instanceof SyntaxError)) {
+    return res.status(400).json({ error: 'Malformed JSON body' });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Payload too large' });
+  }
+  // Log details server-side only (message, no stack in response)
+  console.error('[ERROR]', err && err.message ? err.message : 'Unknown error');
+  res.status(500).json({ error: 'Internal server error' });
 });
+
+// ===== START =====
+if (require.main === module) {
+  app.listen(PORT, '127.0.0.1', () => {
+    console.log(`✅ WhatsApp Webhook v2 (with DB)`);
+    console.log(`   Port: ${PORT}`);
+    console.log(`   DB: ${DB_PATH}`);
+    console.log(`   Webhook signature: ${APP_SECRET ? '✅ enforced' : '⚠️  APP_SECRET unset — POST /webhook returns 503'}`);
+    console.log(`   API auth: ${API_KEY ? '✅ enforced' : '⚠️  API_KEY unset — /api/* returns 503'}`);
+    console.log(`   Max phones: ${MAX_PHONE_NUMBERS}`);
+    console.log(`   Max convos/day/phone: ${MAX_CONVERSATIONS_PER_DAY}`);
+  });
+}
+
+module.exports = app;
