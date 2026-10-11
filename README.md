@@ -192,18 +192,54 @@ pulling from it over the private network.
 
 ## Security
 
+Full threat model: [SECURITY.md](SECURITY.md).
+
+- **Mandatory webhook signature** — every `POST /webhook` must carry a valid
+  `X-Hub-Signature-256` HMAC of the raw body (`APP_SECRET`), compared in
+  constant time. If `APP_SECRET` is unset the endpoint **fails closed with 503**
+  — unverified payloads are never processed.
+- **API-key auth on `/api/*`** — all internal API routes require an
+  `X-API-Key` header matching `API_KEY` (constant-time compare). Unset
+  `API_KEY` → every `/api/*` route returns **503** (`/health` stays open).
+  Add the header to your processor/bridge calls: `X-API-Key: <API_KEY>`.
 - **Fail-closed webhook verification** — server refuses to start without `VERIFY_TOKEN`; comparison is constant-time (`crypto.timingSafeEqual`)
-- **No secrets in code** — all credentials via environment variables (see `webhook/.env.example`)
+- **Security headers on every response** — CSP `default-src 'none'; frame-ancestors 'none'`, `nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`, `Permissions-Policy`, `Cache-Control: no-store` on `/api` + `/webhook`
+- **Body size limit** — 1 MB JSON cap on all routes including `POST /webhook`
+- **SQL safety** — every query is a bound-parameter prepared statement (audited; regression-tested)
+- **No secrets in code or logs** — credentials via env only; generic error JSON, no stack traces in responses
 - **Abuse limits** — per-day conversation caps and phone-number ceilings mitigate spam/DDoS through your bot
 - **Local PII** — `myinfo` data and conversation DB stay on your server; nothing is synced to third parties
 - **Authorized-number gating** — personal-data queries require numbers listed in `AUTHORIZED_NUMBERS`
+- **CI** — Node 20/22 matrix: `npm ci`, `node --test` suite, `npm audit --audit-level=high`, gitleaks (actions SHA-pinned)
+
+Reject-path spot-checks once the server is running:
+
+```bash
+# unsigned webhook → 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:3001/webhook \
+  -H 'Content-Type: application/json' -d '{"object":"whatsapp_business_account"}'
+# → 401
+
+# webhook with valid signature → 200 EVENT_RECEIVED
+BODY='{"object":"whatsapp_business_account","entry":[]}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$APP_SECRET" | awk '{print $2}')"
+curl -s -X POST http://127.0.0.1:3001/webhook -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: $SIG" -d "$BODY"
+# → EVENT_RECEIVED
+
+# API without key → 401 (403/503 variants per SECURITY.md)
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/api/stats
+# → 401
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3001/api/stats -H "X-API-Key: $API_KEY"
+# → 200
+```
 
 > ⚠️ Run behind TLS (nginx/Caddy reverse proxy). WhatsApp Cloud API requires HTTPS anyway.
 > Rotate your Meta app secret and access tokens periodically.
 
 ## Requirements
 
-- Node.js 18+ (`express`, `axios`, `better-sqlite3`, `dotenv`)
+- Node.js 20+ (`express`, `axios`, `better-sqlite3`, `dotenv`)
 - Python 3.10+ (`requests`)
 - WhatsApp Business/Cloud API access
 - Optional: local llama.cpp server for zero-cost LLM replies
