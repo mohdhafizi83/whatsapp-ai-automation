@@ -1,4 +1,6 @@
 # WhatsApp AI Automation
+[![CI](https://github.com/mohdhafizi83/whatsapp-ai-automation/actions/workflows/ci.yml/badge.svg)](https://github.com/mohdhafizi83/whatsapp-ai-automation/actions/workflows/ci.yml)
+
 
 A self-hosted WhatsApp automation stack: webhook ingestion, an AI reply processor, a zero-LLM task router, and a personal data hub — everything runs on your own server.
 
