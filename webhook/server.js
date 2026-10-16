@@ -8,6 +8,8 @@ const { pipeline } = require('stream/promises');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+// Default stays loopback-only (reverse-proxy in front); set HOST=0.0.0.0 inside containers.
+const HOST = process.env.HOST || '127.0.0.1';
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || '';
 if (!VERIFY_TOKEN) {
   console.error('FATAL: VERIFY_TOKEN env var is required (fail-closed). See .env.example');
@@ -671,7 +673,7 @@ app.use((err, req, res, next) => {
 
 // ===== START =====
 if (require.main === module) {
-  app.listen(PORT, '127.0.0.1', () => {
+  app.listen(PORT, HOST, () => {
     console.log(`✅ WhatsApp Webhook v2 (with DB)`);
     console.log(`   Port: ${PORT}`);
     console.log(`   DB: ${DB_PATH}`);

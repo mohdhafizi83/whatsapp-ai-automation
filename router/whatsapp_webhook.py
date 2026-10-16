@@ -76,7 +76,9 @@ class WebhookHandler(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.getenv("WEBHOOK_PORT", "3003"))
-    server = HTTPServer(("127.0.0.1", port), WebhookHandler)
+    # Default stays loopback-only; set BIND_HOST=0.0.0.0 inside containers.
+    bind_host = os.getenv("BIND_HOST", "127.0.0.1")
+    server = HTTPServer((bind_host, port), WebhookHandler)
     logger.info(f"WhatsApp Webhook started on port {port}")
     
     try:

@@ -1,0 +1,14 @@
+# WhatsApp AI Automation — zero-LLM task router (Python stdlib + requests)
+# Build context = repo root:  docker build -f Dockerfile.router .
+
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY router/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY router/ ./
+# Run unprivileged; logs go to stdout (LOG_FILE points at /dev/stdout in compose).
+RUN useradd -r -u 10001 router && mkdir -p /tmp/router && chown -R router /app
+USER router
+EXPOSE 3002
+CMD ["python", "router.py"]

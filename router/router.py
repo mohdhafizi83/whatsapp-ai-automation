@@ -146,7 +146,9 @@ class RouterHandler(BaseHTTPRequestHandler):
 
 def main():
     port = int(os.getenv("ROUTER_PORT", "3002"))
-    server = HTTPServer(("127.0.0.1", port), RouterHandler)
+    # Default stays loopback-only; set BIND_HOST=0.0.0.0 inside containers.
+    bind_host = os.getenv("BIND_HOST", "127.0.0.1")
+    server = HTTPServer((bind_host, port), RouterHandler)
     logger.info(f"Task Router started on port {port} (NO LLM)")
     logger.info(f"Power Tool API: {POWER_TOOL_API}")
     logger.info(f"Telegram Notify: {TELEGRAM_NOTIFY}")

@@ -1,0 +1,23 @@
+# WhatsApp AI Automation — webhook + processor service (Node/Express)
+# Build context = repo root:  docker build -f Dockerfile.webhook .
+
+FROM node:20-bookworm-slim AS deps
+WORKDIR /app
+COPY webhook/package.json webhook/package-lock.json ./
+# better-sqlite3 ships prebuilt binaries; build tools are the fallback if a
+# prebuild download fails for your platform.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 make g++ \
+ && npm ci --omit=dev \
+ && rm -rf /var/lib/apt/lists/*
+
+FROM node:20-bookworm-slim
+ENV NODE_ENV=production
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY webhook/ ./
+# Run unprivileged; /data holds the SQLite DB (mount a volume there).
+RUN mkdir -p /data /app/media && chown -R node:node /app /data
+USER node
+EXPOSE 3001
+CMD ["node", "server.js"]

@@ -1,0 +1,56 @@
+# WhatsApp AI Automation — local stack
+# Quickstart: cp .env.example .env  (fill VERIFY_TOKEN/APP_SECRET/API_KEY)  then:
+#   docker compose up -d --build
+# Webhook: http://localhost:${WEBHOOK_HOST_PORT:-3001}/health
+# Router:  http://localhost:${ROUTER_HOST_PORT:-3002}/health
+
+services:
+  webhook:
+    build:
+      context: .
+      dockerfile: Dockerfile.webhook
+    image: whatsapp-ai-automation/webhook:local
+    container_name: wa-webhook
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PORT: "3001"
+      HOST: "0.0.0.0"   # container-internal; host port mapping still controls exposure
+      DB_PATH: /data/whatsapp.db
+    ports:
+      - "${WEBHOOK_HOST_PORT:-3001}:3001"
+    volumes:
+      - wa-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  router:
+    build:
+      context: .
+      dockerfile: Dockerfile.router
+    image: whatsapp-ai-automation/router:local
+    container_name: wa-router
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ROUTER_PORT: "3002"
+      BIND_HOST: "0.0.0.0"   # container-internal; host port mapping still controls exposure
+      LOG_FILE: /dev/stdout
+      POWER_TOOL_API: ${POWER_TOOL_API:-http://host.docker.internal:5557/api/dispatch}
+    ports:
+      - "${ROUTER_HOST_PORT:-3002}:3002"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:3002/health', timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+volumes:
+  wa-data:
