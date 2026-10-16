@@ -77,6 +77,17 @@ is identical for both providers — only the transport layer changes.
 
 ## Setup
 
+### 0. Docker (recommended)
+
+```bash
+cp .env.example .env      # set VERIFY_TOKEN, APP_SECRET, API_KEY (see file)
+docker compose up -d --build
+curl http://localhost:3001/health   # webhook
+curl http://localhost:3002/health   # router
+```
+
+Full walkthrough: [docs/getting-started.md](docs/getting-started.md). Connecting real WhatsApp traffic: [docs/meta-cloud-api-setup.md](docs/meta-cloud-api-setup.md). Every variable: [docs/configuration.md](docs/configuration.md).
+
 ### 1. Webhook + processor (Node 18+)
 
 ```bash
